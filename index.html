@@ -467,12 +467,21 @@
   };
 
   // OpenFreeMap is a free, keyless, unlimited vector tile service, used here
-  // purely for its cleaner rendering than plain OSM raster tiles — labels are
-  // left as the style's default, which is the local (Greek) name.
+  // purely for its cleaner rendering than plain OSM raster tiles. Its default
+  // style actually prefers English for larger place labels (cities, regions)
+  // out of the box, which reads as an inconsistent English/Greek mix — so
+  // every label layer is forced to the plain local name field instead, for a
+  // consistently Greek map.
   async function buildMapStyle(){
     const res = await fetch('https://tiles.openfreemap.org/styles/liberty');
     if (!res.ok) throw new Error('style fetch failed');
-    return await res.json();
+    const style = await res.json();
+    (style.layers || []).forEach(layer => {
+      if (layer.layout && layer.layout['text-field']) {
+        layer.layout['text-field'] = ['get', 'name'];
+      }
+    });
+    return style;
   }
 
   let map;
