@@ -466,37 +466,20 @@
     layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
   };
 
-  // OpenFreeMap is a free, keyless, unlimited vector tile service. Its
-  // default style uses local (Greek) names. Individual street names very
-  // rarely carry a true English translation in OSM data (only larger place
-  // labels like city names typically do) — but many do carry a Latin-alphabet
-  // transliteration, which is genuinely readable even if it's not a
-  // translation ("Ermou" instead of "Ερμού"). Every label layer is patched to
-  // prefer, in order: true English name, Latin transliteration (two common
-  // field-name conventions), then the local name as a last resort.
-  async function buildEnglishStyle(){
+  // OpenFreeMap is a free, keyless, unlimited vector tile service, used here
+  // purely for its cleaner rendering than plain OSM raster tiles — labels are
+  // left as the style's default, which is the local (Greek) name.
+  async function buildMapStyle(){
     const res = await fetch('https://tiles.openfreemap.org/styles/liberty');
     if (!res.ok) throw new Error('style fetch failed');
-    const style = await res.json();
-    (style.layers || []).forEach(layer => {
-      if (layer.layout && layer.layout['text-field']) {
-        layer.layout['text-field'] = [
-          'coalesce',
-          ['get', 'name:en'],
-          ['get', 'name:latin'],
-          ['get', 'name_int'],
-          ['get', 'name']
-        ];
-      }
-    });
-    return style;
+    return await res.json();
   }
 
   let map;
 
   async function initMap(){
     let style;
-    try { style = await buildEnglishStyle(); }
+    try { style = await buildMapStyle(); }
     catch (e) { style = RASTER_FALLBACK_STYLE; }
 
     map = new maplibregl.Map({
