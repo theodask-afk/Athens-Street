@@ -16,7 +16,7 @@
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
 <style>
   :root{
     --paper: #EFE7D6;
@@ -185,18 +185,16 @@
   #map-wrap{ position:relative; flex:1; min-height:0; background:var(--paper-dim); }
   #map{ width:100%; height:100%; background:var(--paper-dim); }
 
-  /* mute the OSM tiles toward the parchment palette */
-  .leaflet-tile-pane{
+  /* mute the map toward the parchment palette */
+  .maplibregl-canvas{
     filter: sepia(0.35) saturate(0.55) brightness(1.08) contrast(0.92) hue-rotate(-6deg);
   }
-  .leaflet-control-attribution{
+  .maplibregl-ctrl-attrib{
     font-family:'IBM Plex Mono', monospace !important;
     font-size:9.5px !important;
     background:rgba(239,231,214,0.85) !important;
   }
-  .leaflet-control-zoom a{
-    color: var(--ink) !important;
-  }
+  .maplibregl-ctrl-attrib a{ color: var(--ink-soft) !important; }
 
   #hint{
     position:absolute;
@@ -431,7 +429,7 @@
 
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
@@ -446,31 +444,80 @@
   let currentGreekName = null;
   let marker = null;
 
-  const ATHENS_CENTER = [37.9755, 23.7348]; // Monastiraki / Plaka area
+  const ATHENS_CENTER = { lat: 37.9755, lng: 23.7348 }; // Monastiraki / Plaka area
 
-  const map = L.map('map', {
-    zoomControl: true,
-    attributionControl: true
-  }).setView(ATHENS_CENTER, 17);
+  // Plain raster fallback (same tiles as before) — used only if the vector
+  // style below fails to load for any reason, so the map never ends up
+  // blank again the way it did with the earlier attempt.
+  const RASTER_FALLBACK_STYLE = {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: [
+          'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+          'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+        ],
+        tileSize: 256,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors'
+      }
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm' }]
+  };
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-  }).addTo(map);
+  // OpenFreeMap is a free, keyless, unlimited vector tile service. Its
+  // default style uses local (Greek) names. Individual street names very
+  // rarely carry a true English translation in OSM data (only larger place
+  // labels like city names typically do) — but many do carry a Latin-alphabet
+  // transliteration, which is genuinely readable even if it's not a
+  // translation ("Ermou" instead of "Ερμού"). Every label layer is patched to
+  // prefer, in order: true English name, Latin transliteration (two common
+  // field-name conventions), then the local name as a last resort.
+  async function buildEnglishStyle(){
+    const res = await fetch('https://tiles.openfreemap.org/styles/liberty');
+    if (!res.ok) throw new Error('style fetch failed');
+    const style = await res.json();
+    (style.layers || []).forEach(layer => {
+      if (layer.layout && layer.layout['text-field']) {
+        layer.layout['text-field'] = [
+          'coalesce',
+          ['get', 'name:en'],
+          ['get', 'name:latin'],
+          ['get', 'name_int'],
+          ['get', 'name']
+        ];
+      }
+    });
+    return style;
+  }
 
-  map.on('click', onMapClick);
+  let map;
+
+  async function initMap(){
+    let style;
+    try { style = await buildEnglishStyle(); }
+    catch (e) { style = RASTER_FALLBACK_STYLE; }
+
+    map = new maplibregl.Map({
+      container: 'map',
+      style: style,
+      center: [ATHENS_CENTER.lng, ATHENS_CENTER.lat],
+      zoom: 16,
+      attributionControl: true
+    });
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+    map.on('click', onMapClick);
+  }
+  initMap();
 
   async function onMapClick(e){
-    const { lat, lng } = e.latlng;
+    const { lat, lng } = e.lngLat;
 
-    if (marker) map.removeLayer(marker);
-    marker = L.circleMarker([lat, lng], {
-      radius: 7,
-      color: '#2B2620',
-      weight: 1.5,
-      fillColor: '#B5602D',
-      fillOpacity: 1
-    }).addTo(map);
+    if (marker) marker.remove();
+    const markerEl = document.createElement('div');
+    markerEl.style.cssText = 'width:15px;height:15px;border-radius:50%;background:#B5602D;border:1.5px solid #2B2620;box-shadow:0 1px 3px rgba(0,0,0,0.4);';
+    marker = new maplibregl.Marker({ element: markerEl }).setLngLat(e.lngLat).addTo(map);
 
     hint.textContent = 'LOCATING STREET…';
     hint.style.opacity = '1';
@@ -498,8 +545,8 @@
       }
 
       hint.style.opacity = '0';
-      recenterAboveSheet(e.latlng);
-      onStreetFound(streetName, e.latlng, greekStreetName);
+      recenterAboveSheet(e.lngLat);
+      onStreetFound(streetName, e.lngLat, greekStreetName);
 
     } catch (err) {
       hint.textContent = 'COULD NOT LOCATE — TRY AGAIN';
@@ -510,14 +557,14 @@
   // The open sheet covers the bottom ~60% of the map. Without this, a tap
   // on a street hidden under that area silently does nothing. So on every
   // valid tap, nudge the map up so the point lands in the visible strip.
-  function recenterAboveSheet(latlng){
-    const mapSize = map.getSize();
-    const visibleHeight = mapSize.y * 0.40; // strip left uncovered by the open sheet
+  function recenterAboveSheet(lngLat){
+    const container = map.getContainer();
+    const visibleHeight = container.clientHeight * 0.40; // strip left uncovered by the open sheet
     const desiredY = visibleHeight * 0.5;
-    const currentPoint = map.latLngToContainerPoint(latlng);
+    const currentPoint = map.project(lngLat);
     const dy = currentPoint.y - desiredY;
     if (Math.abs(dy) > 8) {
-      map.panBy([0, dy], { animate: true, duration: 0.3 });
+      map.panBy([0, dy], { animate: true, duration: 300 });
     }
   }
 
@@ -842,8 +889,8 @@
       lookupWikipedia(streetName).catch(() => [])
     ]);
 
-    if (osm) results.push(osm);
     results.push(...enWikiMatches);
+    if (osm) results.push(osm);
     results.push(...greekWikiMatches);
 
     cache[streetName] = results;
